@@ -3,10 +3,70 @@ import uuid
 
 import pytest
 from freezegun import freeze_time
+from redis.asyncio import Redis
 from taskiq import ScheduledTask
 
 from taskiq_redis.list_schedule_source import ListRedisScheduleSource
 from taskiq_redis.schedule_source import RedisScheduleSource
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "",
+        "schedule",
+        "auryx:schedules",
+        ":leading",
+        "trailing:",
+        "tenant::account:retries",
+        "tenant:time:queue",
+        "زمان‌بندی:طلاملا",
+        "emoji:🦋",
+    ],
+)
+@pytest.mark.parametrize(
+    "offset",
+    [datetime.timedelta(), datetime.timedelta(hours=3, minutes=30)],
+)
+@freeze_time("2025-01-01 00:00:00")
+async def test_past_schedule_preserves_arbitrary_prefix_and_payload(
+    redis_url: str,
+    prefix: str,
+    offset: datetime.timedelta,
+) -> None:
+    """Recover existing past schedules without changing their stored payload."""
+    source = ListRedisScheduleSource(redis_url, prefix=prefix)
+    at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=4)
+    schedule = ScheduledTask(
+        task_name="test_task",
+        labels={"queue_name": "test"},
+        args=[7],
+        kwargs={"note": "آزمون بازیابی"},
+        time=at.astimezone(datetime.timezone(offset)),
+    )
+    try:
+        await source.add_schedule(schedule)
+        async with Redis.from_url(redis_url) as redis:
+            key = f"{prefix}:data:{schedule.schedule_id}"
+            before = await redis.get(key)
+            assert before is not None
+            assert await source.get_schedules() == [schedule]
+            assert await redis.get(key) == before
+        await source.post_send(schedule)
+        assert await source.get_schedules() == []
+    finally:
+        await source.delete_schedule(schedule.schedule_id)
+        await source.shutdown()
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["not-a-date", "2025-13-01T00:00", "2025-01-01T25:00"],
+)
+def test_invalid_time_key_remains_ignored(timestamp: str) -> None:
+    source = ListRedisScheduleSource("redis://localhost:1", prefix="tenant:time:jobs")
+    assert source._parse_time_key(f"tenant:time:jobs:time:{timestamp}") is None
 
 
 @pytest.mark.anyio

@@ -95,7 +95,7 @@ class ListRedisScheduleSource(ScheduleSource):
     def _parse_time_key(self, key: str) -> datetime.datetime | None:
         """Get time value from the timed-key."""
         try:
-            dt_str = key.split(":", 2)[2]
+            dt_str = key.removeprefix(f"{self._prefix}:time:")
             return datetime.datetime.strptime(dt_str, "%Y-%m-%dT%H:%M").replace(
                 tzinfo=datetime.timezone.utc,
             )
